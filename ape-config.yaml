@@ -1,0 +1,6 @@
+name: yeth-snapshot
+plugins:
+  - name: foundry
+  - name: etherscan
+ethereum:
+  default_network: mainnet
