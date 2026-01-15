@@ -3,6 +3,7 @@ import json
 
 DEPLOYMENT_HEIGHT = 17583859
 SNAPSHOT_HEIGHT = 23914085
+MIN_BALANCE = 10**14
 
 POOL = "0xCcd04073f4BdC4510927ea9Ba350875C3c65BF81"
 YETH = "0x1BED97CBC3c24A4fb5C069C6E311a967386131f7"
@@ -21,6 +22,8 @@ CURVE_LP_YEARN_VAULT_COVE = "0x093f4FCA4b71912EDb33B2d4Bb92E5b85658D833"
 CURVE_LP_STAKEDAO = "0x85496C4A63F376CA8174AC43ADAD49C5464035BD"
 BOOTSTRAP = "0x7cf484D9d16BA26aB3bCdc8EC4a73aC50136d491"
 POL = "0xbBBBBbbB6B942883EAd4976882C99201108c784d"
+INVERSE_MARKET = "0x0c0bb843FAbda441edeFB93331cFff8EC92bD168"
+
 YCHAD = "0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52"
 YEARN_TREASURY = "0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde"
 YEARN_TRADE_HANDLER = "0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b"
@@ -61,6 +64,9 @@ def main():
     # build a list of addresses that interacted with the protocol in any way, using emitted events
     # of all related tokens (including LP, yVault, gauges etc), and write to a json file
     # populate_addresses()
+
+    # build a list of Inverse escrows
+    # populate_inverse_escrows()
 
     addresses = read_json("addresses")
     with networks.fork(provider_name="foundry", block_number=SNAPSHOT_HEIGHT) as fork:
@@ -109,6 +115,14 @@ def snapshot(addresses, whitelist):
     for address, balance in lp_balances.items():
         balances[address] = balances.get(address, 0) + lp_balance * balance // lp_supply
 
+    # credit Inverse for all claims held inside their escrows
+    inverse_escrows = read_json("inverse_escrows")
+    balances["inverse"] = 0
+    for address in inverse_escrows:
+        balance = balances.pop(address, 0)
+        if balance > 0:
+            balances["inverse"] += balance
+
     # make sure it still adds up
     diff = expected_sum - sum(balances.values())
     assert diff >= 0 and diff <= 100 # rounding
@@ -121,8 +135,17 @@ def snapshot(addresses, whitelist):
     for p in pop:
         balances.pop(p)
 
+    # sort by address
+    sorted_balances = {}
+    for address in sorted(balances.keys()):
+        balance = balances[address]
+        if balance >= MIN_BALANCE:
+            sorted_balances[address] = balance
+    balances = sorted_balances
+
     print(f"total claim: {sum(balances.values())/UNIT:.3f} ETH")
 
+    write_json("snapshot", balances, dir=False)
     assert_eoas(addresses, whitelist, balances)
 
 def calculate_lp_balances():
@@ -251,13 +274,27 @@ def populate_bootstrap_balances(addresses):
     assert sum(balances.values()) == bootstrap.deposited()
     write_json("bootstrap_balances", balances)
 
+def populate_inverse_escrows():
+    print("populate Inverse escrows")
+    addresses = set()
+
+    token = Contract(INVERSE_MARKET, abi="abi/inverse_market.json")
+    events = token.CreateEscrow.query("*", start_block=DEPLOYMENT_HEIGHT, stop_block=-1)
+
+    for ev in events["event_arguments"]:
+        addresses.add(ev["escrow"])
+
+    addresses = list(addresses)
+    addresses.sort()
+    write_json("inverse_escrows", addresses)
+
 def assert_eoas(addresses, whitelist, balances):
     count = 0
     contracts = ""
     for address, balance in balances.items():
-        if addresses[address] > 0 and address not in whitelist:
+        if addresses.get(address, 0) > 0 and address not in whitelist:
             count += 1
-            contracts += f"  {address}: {balance/UNIT:.3f}\n"
+            contracts += f"  {address}: {balance/UNIT:.5f}\n"
     if count > 0:
         print(f"Contracts:\n{contracts}")
         raise Exception(f"{count} entries are contracts")
@@ -284,8 +321,8 @@ def read_json(f):
     f.close()
     return r
 
-def write_json(f, d):
-    f = open(f"data/{f}.json", "w")
+def write_json(f, d, dir=True):
+    f = open(f"{'data/' if dir else ''}{f}.json", "w")
     json.dump(d, f, indent=2)
     f.close()
 
