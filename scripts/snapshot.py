@@ -23,21 +23,30 @@ CURVE_LP_STAKEDAO = "0x85496C4A63F376CA8174AC43ADAD49C5464035BD"
 BOOTSTRAP = "0x7cf484D9d16BA26aB3bCdc8EC4a73aC50136d491"
 POL = "0xbBBBBbbB6B942883EAd4976882C99201108c784d"
 INVERSE_MARKET = "0x0c0bb843FAbda441edeFB93331cFff8EC92bD168"
+BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
+BALANCER_LP_GAUGE = "0xC219821b1FE1bBe436f62D911F00Ef1C8542A8F7"
+BALANCER_LP_AURA = "0xca5Ee20b1bF03EfBCfD28f01Cd2cAb4d0028E64c"
+BALANCER_LP_YEARN_STRATEGY = "0xC44fa9DeFC3fCaef37ee83b2DC4570F77E5597b0"
+BALANCER_LP_YEARN_VAULT = "0x42842754aBce504E12C20E434Af8960FDf85C833"
+BALANCER_LP_YEARN_ACCOUNTANT = "0xb89c1D321eF404d086fB8D1d6EB0BE69ff1D504e"
 
 YCHAD = "0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52"
 YEARN_TREASURY = "0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde"
 YEARN_TRADE_HANDLER = "0xb634316E06cC0B358437CbadD4dC94F1D3a92B3b"
 YEARN_FEE_RECIPIENT = "0x14EFe6390C6758E3fE4379A14e3B329274b1b072"
+YEARN_VAULT_FEE_RECIPIENT = "0x044F9C86a0Da637a235E83564215DC271Bc0deFc"
 
 CONVEX_PROXY = "0x989AEb4d175e16225E39E87d0D97A3360524AD80"
 YEARN_CURVE_VOTER = "0xF147b8125d2ef93FB6965Db97D6746952a133934"
 STAKEDAO_CURVE_VOTER = "0x52f541764E6e90eeBc5c21Ff570De0e2D63766B6"
 CURVE_ROUTER = "0xF0d4c12A5768D806021F80a262B4d39d26C58b8D"
+AURA_BALANCER_VOTER = "0xaF52695E1bB01A16D33D7194C28C42b10e0Dbec2"
 
 STAKEDAO_VEYFI_LOCK = "0xF750162fD81F9a436d74d737EF6eE8FC08e98220"
 ONEUP_VEYFI_LOCK = "0x242521ca01f330F050a65FF5B8Ebbe92198Ae64F"
 COVE_VEYFI_LOCK = "0x05dcdBF02F29239D1f8d9797E22589A2DE1C152F"
 
+BALANCER_DUST = 10**6
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 UNIT = 10**18
 MAX = 2**256 - 1
@@ -53,12 +62,15 @@ TOKENS = [
     ["lp_yvault_1up", CURVE_LP_YEARN_VAULT_1UP],
     ["lp_yvault_cove", CURVE_LP_YEARN_VAULT_COVE],
     ["lp_stakedao", CURVE_LP_STAKEDAO],
+    ["balancer_gauge", BALANCER_LP_GAUGE],
+    ["balancer_aura", BALANCER_LP_AURA],
+    ["balancer_yvault", BALANCER_LP_YEARN_VAULT]
 ]
 
 def main():
-    # uncomment function calls starting with `populate` to fetch the data from the chain
+    # uncomment function calls starting with `populate` to re-fetch the data from the chain
 
-    # load list of contracts that are allowed to exist in the final tally (e.g. gnosis safes, 7720 delegation)
+    # load list of contracts that are allowed to exist in the final tally (e.g. gnosis safes, 7702 delegations)
     whitelist = read_json("whitelisted_contracts")
 
     # build a list of addresses that interacted with the protocol in any way, using emitted events
@@ -97,6 +109,17 @@ def snapshot(addresses, whitelist):
         styeth_balances[address] = styeth_balances.get(address, 0) + balance
     assert sum(styeth_balances.values()) == styeth_supply
 
+    # credit st-yETH to Balancer pool depositors
+    bal = Contract(BALANCER_VAULT, abi="abi/balancer_vault.json")
+    bal_balances = read_balancer_balances()
+    for id, pool_balances in bal_balances.items():
+        pool_supply = sum(pool_balances.values())
+        pool_balance = bal.getPoolTokenInfo(id, STYETH)[0]
+        styeth_balances[BALANCER_VAULT] -= pool_balance
+        for address, balance in pool_balances.items():
+            styeth_balances[address] = styeth_balances.get(address, 0) + pool_balance * balance // pool_supply
+    assert styeth_balances[BALANCER_VAULT] >= 0
+
     # credit st-yETH holders
     yeth_staked = balances.pop(STYETH)
     for address, balance in styeth_balances.items():
@@ -123,15 +146,22 @@ def snapshot(addresses, whitelist):
         if balance > 0:
             balances["inverse"] += balance
 
+    # credit Balancer gauge depositors
+    bal_gauge_balances = calculate_balancer_gauge_balances()
+    bal_gauge_supply = sum(bal_gauge_balances.values())
+    bal_gauge_balance = balances.pop(BALANCER_LP_GAUGE)
+    for address, balance in bal_gauge_balances.items():
+        balances[address] = balances.get(address, 0) + bal_gauge_balance * balance // bal_gauge_supply
+
     # make sure it still adds up
     diff = expected_sum - sum(balances.values())
     assert diff >= 0 and diff <= 100 # rounding
 
-    # zero out POL
+    # zero out POL to avoid double counting
     balances.pop(POL)
 
     # yearn forfeits their claims
-    pop = [YCHAD, YEARN_TREASURY, YEARN_TRADE_HANDLER, YEARN_FEE_RECIPIENT]
+    pop = [YCHAD, YEARN_TREASURY, YEARN_TRADE_HANDLER, YEARN_FEE_RECIPIENT, YEARN_VAULT_FEE_RECIPIENT]
     for p in pop:
         balances.pop(p)
 
@@ -147,9 +177,10 @@ def snapshot(addresses, whitelist):
 
     write_json("snapshot", balances, dir=False)
     assert_eoas(addresses, whitelist, balances)
+    print("snapshot created and stored in snapshot.json")
 
 def calculate_lp_balances():
-    # start with raw lp token balances
+    # start with raw LP token balances
     lp_balances = read_balances("lp", CURVE_LP)
     lp_supply = sum(lp_balances.values())
 
@@ -159,23 +190,23 @@ def calculate_lp_balances():
     for address, balance in gauge_balances.items():
         lp_balances[address] = lp_balances.get(address, 0) + balance
 
-    # verify yvault strategy is the only convex depositor
+    # verify yVault strategy is the only Convex depositor
     convex = erc20(CURVE_LP_CONVEX_REWARDS)
     assert convex.balanceOf(CURVE_LP_YEARN_STRATEGY_CONVEX) == lp_balances[CONVEX_PROXY]
 
-    # credit balances of contracts related to the strategy to the yvault
+    # credit balances of contracts related to the strategy to the yVault
     take = [CONVEX_PROXY, CURVE_LP_YEARN_STRATEGY_CONVEX, CURVE_LP_YEARN_STRATEGY, YEARN_CURVE_VOTER]
     for t in take:
         lp_balances[CURVE_LP_YEARN_VAULT] += lp_balances.pop(t)
 
-    # credit yvault depositors
+    # credit yVault depositors
     yvault_balances = calculate_yvault_balances()
     yvault_lp_balance = lp_balances.pop(CURVE_LP_YEARN_VAULT)
     yvault_supply = sum(yvault_balances.values())
     for address, balance in yvault_balances.items():
         lp_balances[address] = lp_balances.get(address, 0) + yvault_lp_balance * balance // yvault_supply
 
-    # credit stakedao depositors
+    # credit StakeDAO depositors
     stakedao_balances = read_balances("lp_stakedao", CURVE_LP_STAKEDAO)
     stakedao_supply = sum(stakedao_balances.values())
     assert stakedao_supply == lp_balances.pop(STAKEDAO_CURVE_VOTER)
@@ -189,7 +220,7 @@ def calculate_lp_balances():
     return lp_balances
 
 def calculate_yvault_balances():
-    # start with raw yvault balances
+    # start with raw yVault balances
     yvault_balances = read_balances("lp_yvault", CURVE_LP_YEARN_VAULT)
     yvault_supply = sum(yvault_balances.values())
 
@@ -200,21 +231,21 @@ def calculate_yvault_balances():
         yvault_balances[address] = yvault_balances.get(address, 0) + balance
     assert sum(yvault_balances.values()) == yvault_supply
 
-    # credit stakedao liquid locker depositors
+    # credit StakeDAO liquid locker depositors
     stakedao_balances = read_balances("lp_yvault_stakedao", CURVE_LP_YEARN_VAULT_STAKEDAO)
     stakedao_supply = sum(stakedao_balances.values())
     assert stakedao_supply == yvault_balances.pop(STAKEDAO_VEYFI_LOCK)
     for address, balance in stakedao_balances.items():
         yvault_balances[address] = yvault_balances.get(address, 0) + balance
 
-    # credit 1up liquid locker depositors
+    # credit 1UP liquid locker depositors
     oneup_balances = read_balances("lp_yvault_1up", CURVE_LP_YEARN_VAULT_1UP)
     oneup_supply = sum(oneup_balances.values())
     assert oneup_supply == yvault_balances.pop(ONEUP_VEYFI_LOCK)
     for address, balance in oneup_balances.items():
         yvault_balances[address] = yvault_balances.get(address, 0) + balance
 
-    # credit cove liquid locker depositors
+    # credit Cove liquid locker depositors
     cove_balances = read_balances("lp_yvault_cove", CURVE_LP_YEARN_VAULT_COVE)
     cove_yvault_balance = yvault_balances.pop(COVE_VEYFI_LOCK)
     cove_supply = sum(cove_balances.values())
@@ -227,12 +258,43 @@ def calculate_yvault_balances():
 
     return yvault_balances
 
+def calculate_balancer_gauge_balances():
+    # start with raw gauge token balances
+    gauge_balances = read_balances("balancer_gauge", BALANCER_LP_GAUGE)
+    gauge_supply = sum(gauge_balances.values())
+
+    # credit Aura depositors
+    aura_balances = read_balances("balancer_aura", BALANCER_LP_AURA)
+    assert sum(aura_balances.values()) == gauge_balances.pop(AURA_BALANCER_VOTER)
+    for address, balance in aura_balances.items():
+        gauge_balances[address] = gauge_balances.get(address, 0) + balance
+
+    # verify yVault is the only strategy depositor
+    strategy = erc20(BALANCER_LP_YEARN_STRATEGY)
+    assert strategy.totalSupply() == strategy.balanceOf(BALANCER_LP_YEARN_VAULT)
+
+    # credit yVault depositors
+    yvault_balances = read_balances("balancer_yvault", BALANCER_LP_YEARN_VAULT)
+    yvault_balances.pop(BALANCER_LP_YEARN_ACCOUNTANT) # redistribute accountant shares over everyone else
+    yvault_supply = sum(yvault_balances.values())
+    yvault_balance = gauge_balances.pop(BALANCER_LP_YEARN_STRATEGY)
+    for address, balance in yvault_balances.items():
+        gauge_balances[address] = gauge_balances.get(address, 0) + yvault_balance * balance // yvault_supply
+
+    # make sure it still adds up
+    diff = gauge_supply - sum(gauge_balances.values())
+    assert diff >= 0 and diff <= 10 # rounding
+
+    return gauge_balances
+
 def populate_addresses():
     print("populate addresses")
     addresses = set()
     # addresses = set(read_json("addresses").keys())
 
-    for name, address in TOKENS:
+    tokens = TOKENS.copy()
+    tokens.extend([[f"balancer_{p[:10]}", p[:42]] for p in read_json("balancer_pools")])
+    for name, address in tokens:
         print(f"fetch {name} transfers")
         token = erc20(address)
         events = token.Transfer.query("*", start_block=DEPLOYMENT_HEIGHT, stop_block=-1)
@@ -262,6 +324,7 @@ def populate_token_balances(addresses):
         print(f"populate {name} balances")
         balances = fetch_balances(token, addresses)
         write_json(f"{name}_balances", balances)
+    populate_balancer_balances(addresses)
 
 def populate_bootstrap_balances(addresses):
     print("populate bootstrap balances")
@@ -273,6 +336,14 @@ def populate_bootstrap_balances(addresses):
             balances[address] = balance
     assert sum(balances.values()) == bootstrap.deposited()
     write_json("bootstrap_balances", balances)
+
+def populate_balancer_balances(addresses):
+    print("populate Balancer balances")
+    balances = {}
+    pools = read_json("balancer_pools")
+    for id in pools:
+        balances[id] = fetch_balances(id[:42], addresses, offset=BALANCER_DUST)
+    write_json("balancer_balances", balances)
 
 def populate_inverse_escrows():
     print("populate Inverse escrows")
@@ -288,6 +359,13 @@ def populate_inverse_escrows():
     addresses.sort()
     write_json("inverse_escrows", addresses)
 
+def read_balancer_balances():
+    balances = read_json("balancer_balances")
+    for pool, b in balances.items():
+        pool = erc20(pool[:42])
+        assert sum(b.values()) + BALANCER_DUST == pool.totalSupply()
+    return balances
+
 def assert_eoas(addresses, whitelist, balances):
     count = 0
     contracts = ""
@@ -299,14 +377,14 @@ def assert_eoas(addresses, whitelist, balances):
         print(f"Contracts:\n{contracts}")
         raise Exception(f"{count} entries are contracts")
 
-def fetch_balances(token, addresses):
+def fetch_balances(token, addresses, offset=0):
     token = erc20(token)
     balances = {}
     for address in addresses:
         balance = token.balanceOf(address)
         if balance > 0:
             balances[address] = balance
-    assert sum(balances.values()) == token.totalSupply(), "not all supply accounted for"
+    assert sum(balances.values()) + offset == token.totalSupply(), "not all supply accounted for"
     return balances
 
 def read_balances(name, token):
