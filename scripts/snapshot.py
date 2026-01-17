@@ -23,6 +23,7 @@ CURVE_LP_STAKEDAO = "0x85496C4A63F376CA8174AC43ADAD49C5464035BD"
 BOOTSTRAP = "0x7cf484D9d16BA26aB3bCdc8EC4a73aC50136d491"
 POL = "0xbBBBBbbB6B942883EAd4976882C99201108c784d"
 INVERSE_MARKET = "0x0c0bb843FAbda441edeFB93331cFff8EC92bD168"
+INVERSE_TREASURY = "0x926dF14a23BE491164dCF93f4c468A50ef659D5B"
 BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 BALANCER_LP_GAUGE = "0xC219821b1FE1bBe436f62D911F00Ef1C8542A8F7"
 BALANCER_LP_AURA = "0xca5Ee20b1bF03EfBCfD28f01Cd2cAb4d0028E64c"
@@ -140,11 +141,12 @@ def snapshot(addresses, whitelist):
 
     # credit Inverse for all claims held inside their escrows
     inverse_escrows = read_json("inverse_escrows")
-    balances["inverse"] = 0
+    assert INVERSE_TREASURY not in balances
+    balances[INVERSE_TREASURY] = 0
     for address in inverse_escrows:
         balance = balances.pop(address, 0)
         if balance > 0:
-            balances["inverse"] += balance
+            balances[INVERSE_TREASURY] += balance
 
     # credit Balancer gauge depositors
     bal_gauge_balances = calculate_balancer_gauge_balances()
