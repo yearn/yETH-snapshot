@@ -5,7 +5,8 @@
 @title yETH recovery claim
 @author Yearn Finance
 @license GNU AGPLv3
-@notice TODO
+@notice Allows a set of pre-configured addresses to claim their vault tokens up until a deadline.
+        Users can optionally redeem the vault token for the underlying token during their claim.
 """
 
 from ethereum.ercs import IERC20
