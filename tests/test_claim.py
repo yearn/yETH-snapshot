@@ -114,8 +114,8 @@ def test_claim_invalid(chain, deployer, alice, bob, yield_vault, claim):
         claim.claim(sender=bob)
     claim.claim(sender=alice)
 
-def test_claim_deadline(chain, deployer, alice, bob, yield_vault, claim):
-    # cant claim without a claimable amount
+def test_claim_deadline(chain, deployer, alice, yield_vault, claim):
+    # cant claim after deadline
     claim.set_claimable([alice], [UNIT], sender=deployer)
     deadline = chain.pending_timestamp + 100
     claim.set_deadline(deadline, sender=deployer)
@@ -123,7 +123,11 @@ def test_claim_deadline(chain, deployer, alice, bob, yield_vault, claim):
 
     chain.pending_timestamp = deadline
     with reverts():
-        claim.claim(sender=bob)
+        claim.claim(sender=alice)
+
+    chain.pending_timestamp = deadline + 1
+    with reverts():
+        claim.claim(sender=alice)
 
     claim.set_deadline(deadline + 100, sender=deployer)
     claim.claim(sender=alice)
@@ -170,13 +174,6 @@ def test_set_claimable_permission(deployer, alice, claim):
         claim.set_claimable([alice], [UNIT], sender=alice)
     claim.set_claimable([alice], [UNIT], sender=deployer)
 
-def test_set_deadline_permission(chain, deployer, alice, claim):
-    # deadline can be set
-    deadline = chain.pending_timestamp + 100
-    with reverts():
-            claim.set_deadline(deadline, sender=alice)
-    claim.set_deadline(deadline, sender=deployer)
-
 def test_set_deadline(chain, deployer, claim):
     # deadline can be set
     deadline = chain.pending_timestamp + 100
@@ -185,10 +182,10 @@ def test_set_deadline(chain, deployer, claim):
     assert claim.deadline() == deadline
 
 def test_set_deadline_permission(chain, deployer, alice, claim):
-    # deadline can be set
+    # only management can set deadline
     deadline = chain.pending_timestamp + 100
     with reverts():
-            claim.set_deadline(deadline, sender=alice)
+        claim.set_deadline(deadline, sender=alice)
     claim.set_deadline(deadline, sender=deployer)
 
 def test_set_management(deployer, alice, claim):
